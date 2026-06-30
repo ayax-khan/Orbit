@@ -1,0 +1,12 @@
+[package]
+name = "orbit-agent"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+# Windows APIs
+windows = { version = "0.60", features = ["Win32_Foundation", "Win32_Graphics_DesktopDuplication", "Win32_Graphics_Gdi", "Win32_UI_Input_KeyboardAndMouse"] }
+enigo = "0.2"
