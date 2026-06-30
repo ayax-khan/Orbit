@@ -11,3 +11,5 @@ redis = { version = "0.27", features = ["tokio-comp"] }
 uuid = { version = "1.11", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 dotenvy = "0.15"
+argon2 = "0.5"
+jsonwebtoken = "9.3"
