@@ -12,3 +12,5 @@ windows = { version = "0.60", features = ["Win32_Foundation", "Win32_Graphics_De
 enigo = "0.2"
 # WebRTC
 webrtc = "0.10"
+# Signaling
+tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
