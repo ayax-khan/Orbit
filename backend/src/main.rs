@@ -1,5 +1,6 @@
 mod db;
 mod auth;
+mod websocket;
 
 use axum::{routing::{get, post}, Router};
 use std::sync::Arc;
@@ -17,6 +18,7 @@ async fn main() {
         .route("/", get(|| async { "ORBIT Backend is running" }))
         .route("/api/v1/auth/register", post(auth::handlers::register))
         .route("/api/v1/auth/login", post(auth::handlers::login))
+        .route("/ws/:session_id", get(websocket::handler::ws_handler))
         .with_state(shared_state);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:8080").await.unwrap();
