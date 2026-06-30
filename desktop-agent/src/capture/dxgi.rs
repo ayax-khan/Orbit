@@ -43,25 +43,38 @@ impl DxgiCapturer {
         }
     }
 
+use windows::Win32::Graphics::Direct3D11::{ID3D11Texture2D, D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE};
+
+// ... inside DxgiCapturer struct and new() implementation ...
+
     pub fn capture_frame(&self) -> std::result::Result<Vec<u8>, String> {
         unsafe {
             let mut frame_info = Default::default();
             let mut resource = None;
             
-            // Acquire Next Frame (Timeout 16ms for ~60 FPS)
             let result = self.duplication.AcquireNextFrame(16, &mut frame_info, &mut resource);
-            
             if result.is_err() {
-                // Handle DXGI_ERROR_WAIT_TIMEOUT, etc.
                 return Err("Frame acquisition failed".to_string());
             }
-            
-            // Resource processing: Map to CPU or copy
-            // ... (Frame processing logic to be implemented)
+
+            let resource = resource.unwrap();
+            let texture: ID3D11Texture2D = resource.cast().map_err(|e| e.to_string())?;
+
+            // Get device from duplication (simplified, would need to store in struct)
+            // let device: ID3D11Device = ...
+            // let context = device.GetImmediateContext().unwrap();
+
+            // Mapping to CPU
+            // let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+            // context.Map(&texture, 0, D3D11_MAP_READ, 0, &mut mapped).unwrap();
+
+            // Copy mapped.pData to Vec<u8>...
+
+            // context.Unmap(&texture, 0);
             
             let _ = self.duplication.ReleaseFrame();
             
-            Ok(vec![]) // Dummy return for now
+            Ok(vec![]) // Replace with actual pixel data
         }
     }
 }
