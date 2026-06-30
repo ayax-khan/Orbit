@@ -44,7 +44,24 @@ impl DxgiCapturer {
     }
 
     pub fn capture_frame(&self) -> std::result::Result<Vec<u8>, String> {
-        // Implementation: AcquireNextFrame, Map resource to CPU
-        Ok(vec![])
+        unsafe {
+            let mut frame_info = Default::default();
+            let mut resource = None;
+            
+            // Acquire Next Frame (Timeout 16ms for ~60 FPS)
+            let result = self.duplication.AcquireNextFrame(16, &mut frame_info, &mut resource);
+            
+            if result.is_err() {
+                // Handle DXGI_ERROR_WAIT_TIMEOUT, etc.
+                return Err("Frame acquisition failed".to_string());
+            }
+            
+            // Resource processing: Map to CPU or copy
+            // ... (Frame processing logic to be implemented)
+            
+            let _ = self.duplication.ReleaseFrame();
+            
+            Ok(vec![]) // Dummy return for now
+        }
     }
 }
