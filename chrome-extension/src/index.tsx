@@ -1,12 +1,20 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import './styles/globals.css';
+import { Login } from './components/Login';
+import { useAuthStore } from './stores/authStore';
 
 const App = () => {
+  const token = useAuthStore((state) => state.token);
+
   return (
     <div className="flex flex-col items-center justify-center h-full p-4">
-      <h1 className="text-2xl font-bold text-blue-600">ORBIT Remote</h1>
-      <p className="mt-2 text-gray-600">Please sign in to continue.</p>
+      <h1 className="text-2xl font-bold text-blue-600 mb-4">ORBIT Remote</h1>
+      {token ? (
+        <p>Logged in!</p>
+      ) : (
+        <Login />
+      )}
     </div>
   );
 };
