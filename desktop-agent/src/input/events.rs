@@ -1,6 +1,7 @@
 use serde::Deserialize;
 use super::mouse::MouseHandler;
 use super::keyboard::KeyboardHandler;
+use enigo::Key;
 
 #[derive(Deserialize)]
 #[serde(tag = "type")]
@@ -30,11 +31,14 @@ impl InputProcessor {
                 InputEvent::MouseClick { x, y } => {
                     self.mouse.move_to(x, y);
                     self.mouse.click();
-                    println!("Simulated mouse click at {}, {}", x, y);
                 }
                 InputEvent::KeyDown { key } => {
-                    println!("Simulated key down: {}", key);
-                    // Map string key to enigo::Key if necessary
+                    // Map string keys to Enigo Keys
+                    match key.as_str() {
+                        "Enter" => self.keyboard.key_click(Key::Enter),
+                        "Backspace" => self.keyboard.key_click(Key::Backspace),
+                        _ => self.keyboard.key_sequence(&key),
+                    }
                 }
             }
         }
