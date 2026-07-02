@@ -8,35 +8,42 @@ export interface WebRTCConnection {
   /** Media stream, when the host negotiates a media track. */
   stream: MediaStream | null;
   /** Canvas element rendering raw data-channel frames (software path). */
-  canvasRef: React.RefObject<HTMLCanvasElement | null>;
+  canvasRef: React.RefObject<HTMLCanvasElement>;
   /** Data channel used to send input events back to the host. */
   dataChannel: RTCDataChannel | null;
   /** Human-readable connection state. */
   status: string;
+  error: string | null;
 }
 
 /**
  * Establishes the WebRTC connection to the host via the backend signaling
- * relay. The client is the offerer and owns the input data channel; it renders
- * either a media stream (hardware H.264 path) or raw frames onto a canvas
- * (software passthrough path).
+ * relay.
  */
 export const useWebRTC = (signalingUrl: string): WebRTCConnection => {
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [dataChannel, setDataChannel] = useState<RTCDataChannel | null>(null);
   const [status, setStatus] = useState('connecting');
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
+    setError(null);
     const pc = new RTCPeerConnection({
       iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
     });
 
     pc.ontrack = (event) => setStream(event.streams[0]);
 
-    pc.onconnectionstatechange = () => setStatus(pc.connectionState);
+    pc.onconnectionstatechange = () => {
+      setStatus(pc.connectionState);
+      if (pc.connectionState === 'failed') {
+        setError('WebRTC connection failed');
+      }
+    };
 
     const ws = new WebSocket(signalingUrl);
+    ws.onerror = () => setError('Signaling server connection error');
 
     pc.onicecandidate = (event) => {
       if (event.candidate && ws.readyState === WebSocket.OPEN) {
@@ -49,18 +56,19 @@ export const useWebRTC = (signalingUrl: string): WebRTCConnection => {
     channel.binaryType = 'arraybuffer';
     channel.onopen = () => setDataChannel(channel);
     channel.onclose = () => setDataChannel(null);
+    channel.onerror = () => setError('Data channel error');
     channel.onmessage = (e) => renderRawFrame(canvasRef.current, e.data);
 
     ws.onmessage = async (event) => {
-      const data = JSON.parse(event.data);
-      if (data.type === 'answer') {
-        await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
-      } else if (data.type === 'ice' && data.candidate) {
-        try {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === 'answer') {
+          await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+        } else if (data.type === 'ice' && data.candidate) {
           await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
-        } catch (err) {
-          console.warn('failed to add ICE candidate', err);
         }
+      } catch (err) {
+        setError('Signaling message error');
       }
     };
 
@@ -77,7 +85,7 @@ export const useWebRTC = (signalingUrl: string): WebRTCConnection => {
     };
   }, [signalingUrl]);
 
-  return { stream, canvasRef, dataChannel, status };
+  return { stream, canvasRef, dataChannel, status, error };
 };
 
 /** Decode and paint a raw BGRA frame produced by the software encoder. */

@@ -8,6 +8,7 @@ use super::models::{
 use super::service::{create_jwt, hash_password, verify_jwt, verify_password};
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
+use crate::utils::rate_limit::check_rate_limit;
 
 /// Very small email sanity check. Full RFC validation is out of scope for v1.
 fn is_valid_email(email: &str) -> bool {
@@ -50,7 +51,16 @@ pub async fn register(
     State(state): State<AppState>,
     Json(payload): Json<RegisterRequest>,
 ) -> AppResult<Json<AuthResponse>> {
-    if !is_valid_email(&payload.email) {
+    let email = payload.email.trim().to_lowercase();
+
+    // Rate limit: 5 attempts per 5 minutes per email
+    if !check_rate_limit(&state, &format!("auth_limit:{}", email), 5, 300).await? {
+        return Err(AppError::BadRequest(
+            "too many attempts, try again later".into(),
+        ));
+    }
+
+    if !is_valid_email(&email) {
         return Err(AppError::BadRequest("invalid email address".into()));
     }
     if payload.password.len() < 8 {
@@ -61,8 +71,6 @@ pub async fn register(
     if payload.full_name.trim().is_empty() {
         return Err(AppError::BadRequest("full name is required".into()));
     }
-
-    let email = payload.email.trim().to_lowercase();
 
     let existing: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM users WHERE email = $1")
         .bind(&email)
@@ -92,6 +100,13 @@ pub async fn login(
     Json(payload): Json<LoginRequest>,
 ) -> AppResult<Json<AuthResponse>> {
     let email = payload.email.trim().to_lowercase();
+
+    // Rate limit: 5 attempts per 5 minutes per email
+    if !check_rate_limit(&state, &format!("auth_limit:{}", email), 5, 300).await? {
+        return Err(AppError::BadRequest(
+            "too many attempts, try again later".into(),
+        ));
+    }
 
     let user: Option<User> = sqlx::query_as(
         "SELECT id, email, password_hash, full_name FROM users WHERE email = $1 AND is_active = TRUE",

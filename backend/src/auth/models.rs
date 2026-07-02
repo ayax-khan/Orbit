@@ -83,12 +83,19 @@ pub struct DeviceSummary {
 
 #[derive(Debug, Deserialize)]
 pub struct CreateSessionRequest {
-    pub host_device_id: Uuid,
+    #[serde(default)]
+    pub host_device_id: Option<Uuid>,
+    #[serde(default)]
+    pub host_user_id: Option<Uuid>,
+    #[serde(default)]
+    pub client_device_id: Option<Uuid>, // For device-to-device sessions
+    pub session_type: String, // 'device' or 'user'
 }
 
 #[derive(Debug, Serialize)]
 pub struct CreateSessionResponse {
     pub session_id: String,
+    pub session_type: String,
     pub stun_servers: Vec<String>,
     pub turn_servers: Vec<String>,
 }

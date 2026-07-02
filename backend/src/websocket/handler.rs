@@ -21,10 +21,7 @@ type Rooms = Arc<Mutex<HashMap<String, Session>>>;
 static ROOMS: once_cell::sync::Lazy<Rooms> =
     once_cell::sync::Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
 
-pub async fn ws_handler(
-    ws: WebSocketUpgrade,
-    Path(session_id): Path<String>,
-) -> impl IntoResponse {
+pub async fn ws_handler(ws: WebSocketUpgrade, Path(session_id): Path<String>) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_socket(socket, session_id))
 }
 

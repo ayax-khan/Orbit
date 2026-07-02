@@ -6,9 +6,7 @@ use axum::{
 use uuid::Uuid;
 
 use crate::auth::handlers::user_id_from_bearer;
-use crate::auth::models::{
-    DeviceSummary, RegisterDeviceRequest, RegisterDeviceResponse,
-};
+use crate::auth::models::{DeviceSummary, RegisterDeviceRequest, RegisterDeviceResponse};
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 
@@ -76,7 +74,11 @@ pub async fn list_devices(
         .map(|d| DeviceSummary {
             id: d.id,
             name: d.device_name,
-            status: if d.is_online { "online".into() } else { "offline".into() },
+            status: if d.is_online {
+                "online".into()
+            } else {
+                "offline".into()
+            },
             last_seen: d.last_seen,
         })
         .collect();
@@ -106,7 +108,39 @@ pub async fn get_device(
     Ok(Json(DeviceSummary {
         id: device.id,
         name: device.device_name,
-        status: if device.is_online { "online".into() } else { "offline".into() },
+        status: if device.is_online {
+            "online".into()
+        } else {
+            "offline".into()
+        },
         last_seen: device.last_seen,
     }))
+}
+
+/// POST /api/v1/devices/heartbeat
+///
+/// Called by the desktop agent to update its online status and last_seen timestamp.
+/// Authenticated via device token (bearer token in Authorization header).
+pub async fn heartbeat(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<Json<serde_json::Value>> {
+    let device_token = bearer(&headers)
+        .and_then(|h| h.strip_prefix("Bearer "))
+        .ok_or(AppError::Unauthorized)?;
+
+    let updated = sqlx::query(
+        "UPDATE devices \
+         SET is_online = TRUE, last_seen = CURRENT_TIMESTAMP \
+         WHERE device_token = $1",
+    )
+    .bind(device_token)
+    .execute(&state.db)
+    .await?;
+
+    if updated.rows_affected() == 0 {
+        return Err(AppError::NotFound);
+    }
+
+    Ok(Json(serde_json::json!({ "status": "ok" })))
 }
