@@ -1,9 +1,0 @@
-{
-  "manifest_version": 3,
-  "name": "ORBIT Remote Desktop",
-  "version": "1.0.0",
-  "permissions": ["storage", "alarms"],
-  "action": {
-    "default_popup": "index.html"
-  }
-}

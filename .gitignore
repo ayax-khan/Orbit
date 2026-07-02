@@ -1,6 +1,15 @@
 # Rust
 /target
+**/target/
 Cargo.lock
+
+# Node
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+*.log
+npm-debug.log*
 
 # Environment
 .env
@@ -10,9 +19,16 @@ Cargo.lock
 # IDE
 .vscode/
 .idea/
+*.swp
 
 # OS
 Thumbs.db
 desktop.ini
 *~
 .DS_Store
+
+# Build/temp artifacts
+*.tmp
+orbit_spec.txt
+orbit_spec_clean.txt
+spec.md

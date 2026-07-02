@@ -1,80 +1,167 @@
-use windows::core::{Result, ComInterface};
-use windows::Win32::Graphics::DesktopDuplication::{IDXGIOutputDuplication, IDXGIOutputDuplication_Impl};
-use windows::Win32::Graphics::Dxgi::{IDXGIAdapter, IDXGIFactory1, IDXGIOutput, DXGI_ADAPTER_DESC, CreateDXGIFactory1};
-use windows::Win32::Graphics::Direct3D11::{D3D11CreateDevice, ID3D11Device, D3D_DRIVER_TYPE_UNKNOWN};
-use windows::Win32::Graphics::Direct3D::{D3D_FEATURE_LEVEL_11_0};
+//! DXGI Desktop Duplication capture backend (Windows only).
+//!
+//! Captures the primary monitor directly from the GPU and copies each frame
+//! into a CPU-readable staging texture, yielding BGRA8 pixel data.
+
+use super::{CaptureError, Frame, ScreenCapturer};
+use windows::core::Interface;
+use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_UNKNOWN;
+use windows::Win32::Graphics::Direct3D11::{
+    D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D,
+    D3D11_CPU_ACCESS_READ, D3D11_CREATE_DEVICE_FLAG, D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE,
+    D3D11_TEXTURE2D_DESC, D3D11_USAGE_STAGING, D3D11_SDK_VERSION,
+};
+use windows::Win32::Graphics::Dxgi::{
+    CreateDXGIFactory1, IDXGIAdapter, IDXGIFactory1, IDXGIOutput, IDXGIOutput1,
+    IDXGIOutputDuplication, IDXGIResource, DXGI_OUTDUPL_FRAME_INFO,
+};
 
 pub struct DxgiCapturer {
+    device: ID3D11Device,
+    context: ID3D11DeviceContext,
     duplication: IDXGIOutputDuplication,
+    width: u32,
+    height: u32,
+    staging: Option<ID3D11Texture2D>,
 }
 
+// The COM objects are used from a single capture thread; the agent never
+// shares a capturer across threads.
+unsafe impl Send for DxgiCapturer {}
+
 impl DxgiCapturer {
-    pub fn new() -> std::result::Result<Self, String> {
+    pub fn new() -> Result<Self, CaptureError> {
         unsafe {
-            // 1. Create DXGI Factory
-            let factory: IDXGIFactory1 = CreateDXGIFactory1().map_err(|e| e.to_string())?;
-            
-            // 2. Enumerate Adapters (Simplification: using adapter 0)
-            let adapter: IDXGIAdapter = factory.EnumAdapters(0).map_err(|e| e.to_string())?;
-            
-            // 3. Create D3D11 Device
+            let factory: IDXGIFactory1 =
+                CreateDXGIFactory1().map_err(|e| CaptureError::Unavailable(e.to_string()))?;
+
+            let adapter: IDXGIAdapter = factory
+                .EnumAdapters(0)
+                .map_err(|e| CaptureError::Unavailable(e.to_string()))?;
+
             let mut device: Option<ID3D11Device> = None;
+            let mut context: Option<ID3D11DeviceContext> = None;
             D3D11CreateDevice(
                 &adapter,
                 D3D_DRIVER_TYPE_UNKNOWN,
+                windows::Win32::Foundation::HMODULE::default(),
+                D3D11_CREATE_DEVICE_FLAG(0),
                 None,
-                Default::default(),
-                Some(&[D3D_FEATURE_LEVEL_11_0]),
-                &mut device,
+                D3D11_SDK_VERSION,
+                Some(&mut device),
                 None,
-                None
-            ).map_err(|e| e.to_string())?;
-            
-            let device = device.ok_or("Failed to create D3D11 device")?;
-            
-            // 4. Enumerate Output (Simplification: using output 0)
-            let output: IDXGIOutput = adapter.EnumOutputs(0).map_err(|e| e.to_string())?;
-            let output1 = output.cast::<windows::Win32::Graphics::Dxgi::IDXGIOutput1>().map_err(|e| e.to_string())?;
-            
-            // 5. Create Desktop Duplication
-            let duplication = output1.DuplicateOutput(&device).map_err(|e| e.to_string())?;
-            
-            Ok(Self { duplication })
+                Some(&mut context),
+            )
+            .map_err(|e| CaptureError::Unavailable(e.to_string()))?;
+
+            let device = device.ok_or_else(|| CaptureError::Unavailable("no D3D11 device".into()))?;
+            let context =
+                context.ok_or_else(|| CaptureError::Unavailable("no D3D11 context".into()))?;
+
+            let output: IDXGIOutput = adapter
+                .EnumOutputs(0)
+                .map_err(|e| CaptureError::Unavailable(e.to_string()))?;
+            let output1: IDXGIOutput1 = output
+                .cast()
+                .map_err(|e| CaptureError::Unavailable(e.to_string()))?;
+
+            let desc = output.GetDesc().unwrap_or_default();
+            let width = (desc.DesktopCoordinates.right - desc.DesktopCoordinates.left).max(0) as u32;
+            let height = (desc.DesktopCoordinates.bottom - desc.DesktopCoordinates.top).max(0) as u32;
+
+            let duplication = output1
+                .DuplicateOutput(&device)
+                .map_err(|e| CaptureError::Unavailable(e.to_string()))?;
+
+            Ok(Self {
+                device,
+                context,
+                duplication,
+                width: if width == 0 { 1920 } else { width },
+                height: if height == 0 { 1080 } else { height },
+                staging: None,
+            })
         }
     }
 
-use windows::Win32::Graphics::Direct3D11::{ID3D11Texture2D, D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE};
+    /// Lazily create (or reuse) a CPU-readable staging texture matching `src`.
+    unsafe fn ensure_staging(&mut self, src: &ID3D11Texture2D) -> Result<(), CaptureError> {
+        if self.staging.is_some() {
+            return Ok(());
+        }
+        let mut desc = D3D11_TEXTURE2D_DESC::default();
+        src.GetDesc(&mut desc);
+        desc.Usage = D3D11_USAGE_STAGING;
+        desc.BindFlags = 0;
+        desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0 as u32;
+        desc.MiscFlags = 0;
 
-// ... inside DxgiCapturer struct and new() implementation ...
+        let mut staging: Option<ID3D11Texture2D> = None;
+        self.device
+            .CreateTexture2D(&desc, None, Some(&mut staging))
+            .map_err(|e| CaptureError::Acquire(e.to_string()))?;
+        self.staging = staging;
+        Ok(())
+    }
+}
 
-    pub fn capture_frame(&self) -> std::result::Result<Vec<u8>, String> {
+impl ScreenCapturer for DxgiCapturer {
+    fn next_frame(&mut self) -> Result<Option<Frame>, CaptureError> {
         unsafe {
-            let mut frame_info = Default::default();
-            let mut resource = None;
-            
-            let result = self.duplication.AcquireNextFrame(16, &mut frame_info, &mut resource);
-            if result.is_err() {
-                return Err("Frame acquisition failed".to_string());
+            let mut frame_info = DXGI_OUTDUPL_FRAME_INFO::default();
+            let mut resource: Option<IDXGIResource> = None;
+
+            // 16ms timeout ~ one frame at 60fps.
+            match self
+                .duplication
+                .AcquireNextFrame(16, &mut frame_info, &mut resource)
+            {
+                Ok(()) => {}
+                Err(_) => return Ok(None), // timeout / no new frame
             }
 
-            let resource = resource.unwrap();
-            let texture: ID3D11Texture2D = resource.cast().map_err(|e| e.to_string())?;
+            let result = (|| {
+                let resource = resource
+                    .as_ref()
+                    .ok_or_else(|| CaptureError::Acquire("no resource".into()))?;
+                let texture: ID3D11Texture2D = resource
+                    .cast()
+                    .map_err(|e| CaptureError::Acquire(e.to_string()))?;
 
-            // Get device from duplication (simplified, would need to store in struct)
-            // let device: ID3D11Device = ...
-            // let context = device.GetImmediateContext().unwrap();
+                self.ensure_staging(&texture)?;
+                let staging = self
+                    .staging
+                    .as_ref()
+                    .ok_or_else(|| CaptureError::Acquire("no staging texture".into()))?
+                    .clone();
 
-            // Mapping to CPU
-            // let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
-            // context.Map(&texture, 0, D3D11_MAP_READ, 0, &mut mapped).unwrap();
+                self.context.CopyResource(&staging, &texture);
 
-            // Copy mapped.pData to Vec<u8>...
+                let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+                self.context
+                    .Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
+                    .map_err(|e| CaptureError::Acquire(e.to_string()))?;
 
-            // context.Unmap(&texture, 0);
-            
+                let row_pitch = mapped.RowPitch as usize;
+                let row_bytes = (self.width as usize) * 4;
+                let mut data = Vec::with_capacity(row_bytes * self.height as usize);
+                let src = mapped.pData as *const u8;
+                for y in 0..self.height as usize {
+                    let row = src.add(y * row_pitch);
+                    let slice = std::slice::from_raw_parts(row, row_bytes);
+                    data.extend_from_slice(slice);
+                }
+
+                self.context.Unmap(&staging, 0);
+                Ok(Frame::new(self.width, self.height, data))
+            })();
+
             let _ = self.duplication.ReleaseFrame();
-            
-            Ok(vec![]) // Replace with actual pixel data
+            result.map(Some)
         }
+    }
+
+    fn backend_name(&self) -> &'static str {
+        "dxgi"
     }
 }
